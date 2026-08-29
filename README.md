@@ -25,9 +25,9 @@ This is an independent re-implementation in Python on top of pluggable LLM provi
 
 > [`docs/BENCH_RESULTS.md`](docs/BENCH_RESULTS.md) — every cross-model bench ever run on this code, with per-candidate Elo, every hypothesis produced, gold-set hits, and direct file pointers. Auto-generated from the bench DB.
 >
-> [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — how control actually flows: the scheduling rules, every branch point, and the runtime's single-process assumption.
+> [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — how control actually flows: the scheduling rules, every branch point, and the runtime's single-process assumption. ([中文](docs/ARCHITECTURE.zh-CN.md))
 >
-> [`docs/PITFALLS.md`](docs/PITFALLS.md) — the bugs this project hit and what each one cost, from "the model searches forever and never commits" to "a grandchild process holding a pipe deadlocks the call". Written to be readable without a concurrency background.
+> [`docs/PITFALLS.md`](docs/PITFALLS.md) — the bugs this project hit and what each one cost, from "the model searches forever and never commits" to "a grandchild process holding a pipe deadlocks the call". Written to be readable without a concurrency background. ([中文](docs/PITFALLS.zh-CN.md))
 
 ## Contents
 
@@ -526,6 +526,7 @@ config/
 docs/
   ARCHITECTURE.md    # control flow, scheduling rules, branch points
   PITFALLS.md        # bugs hit and why each fix is shaped the way it is
+  *.zh-CN.md         # Chinese versions of the two documents above
   BENCH_RESULTS.md   # every bench ever run (auto-generated)
 scripts/
   build_bench_report.py

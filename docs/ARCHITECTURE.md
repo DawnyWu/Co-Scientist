@@ -1,5 +1,7 @@
 # Architecture
 
+> 中文版:[ARCHITECTURE.zh-CN.md](ARCHITECTURE.zh-CN.md)
+
 The [README](../README.md) shows *which* components exist. This document shows
 *how control actually flows between them* — the scheduling rules, the branch
 points, and the assumptions the runtime depends on. That information is spread

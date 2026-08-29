@@ -1,5 +1,7 @@
 # Pitfalls
 
+> 中文版:[PITFALLS.zh-CN.md](PITFALLS.zh-CN.md)
+
 Every entry below is a bug this project actually hit. The fixes are in the
 code, but the *reasoning* only survives as scattered comments, which means the
 next person to touch that area — or anyone building something similar — has to
