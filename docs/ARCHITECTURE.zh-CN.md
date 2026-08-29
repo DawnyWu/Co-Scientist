@@ -13,6 +13,8 @@
 - [共享可变状态与单进程假设](#共享可变状态与单进程假设)
 
 > 想知道每个 agent 具体在要求模型做什么,见 [PROMPTS.zh-CN.md](PROMPTS.zh-CN.md) —— 14 个提示词模板的中文对照导读,含每个 `{{ 变量 }}` 由谁填什么。
+>
+> 下文出现的"原子""幂等""租约""丢更新"等并发术语,在 [PITFALLS.zh-CN.md 的术语表](PITFALLS.zh-CN.md#术语表)里有普通话解释。
 
 ## 最重要的一个概念
 
@@ -113,8 +115,8 @@ ORDER BY priority ASC, created_at ASC LIMIT 1
 | 80 | `AddToTournament` | 纯数据库写入,不调模型,几毫秒。让它插队几乎不占资源,却能解锁整条下游链 |
 | 100 | 初始 Generation、Reflection(full) | 默认档 |
 | 120 | 聚焦某个新假设的 `RunTournamentBatch` | |
-| 140 | Evolution(空闲补活) | 精化工作,不该抢占正在流动的主链路 |
-| 150 | 锦标赛批次(空闲补活) | 同上 |
+| 140 | Evolution(队列空了之后补充的) | 精化工作,不该抢占正在流动的主链路 |
+| 150 | 锦标赛批次(队列空了之后补充的) | 同上 |
 | 180 | 元评审系统反馈 | 同上 |
 | 200 | Proximity 重聚类 | 批量工作,没有时限 |
 
@@ -122,9 +124,9 @@ ORDER BY priority ASC, created_at ASC LIMIT 1
 
 优先级**不是抢占式的**。它只影响 `claim_one` 的排序。一个已经在 600 秒租约下运行的 Reflection 不会被新来的 priority=80 任务打断。它的粒度是"下一个空槽给谁",不是"立刻插队"——在这里够用,因为任务都是分钟级且包着一次不可中断的模型调用。
 
-### 4. 空闲补活 —— `_decide_next_steps`
+### 4. 队列空了之后补充任务 —— `_decide_next_steps()`
 
-只在没有在途任务、也没有 pending 时运行,最快每 10 秒一次。三条条件规则(见上表)。如果一个任务都没排出来,会话以 `StopReason.IDLE` 退出。
+只在没有在途任务、队列里也没有待领任务时运行,最快每 10 秒一次。这个时刻按理会话就该结束了,但通常还有有用的活可干——再打几场比赛、把排名靠前的假设做一轮进化、生成一次元评审——所以这个方法会试着往队列里再塞几个任务。三条条件规则见上表。如果一个都塞不出来,会话才真的以 `StopReason.IDLE` 退出。
 
 它的幂等键锚定在**当前比赛计数**上,而不是新生成的任务 id。如果用新 id,每次空闲检查(可能每 10 秒一次)都会再入队一个锦标赛或进化任务,哪怕前一个还在 pending——队列会被灌满,而且同一份工作会被重复计入预算。
 
@@ -137,7 +139,7 @@ ORDER BY priority ASC, created_at ASC LIMIT 1
 | agent | 分支 | 由什么决定 |
 | --- | --- | --- |
 | 生成 | `literature`(已实现);`debate` / `assumption` / `feedback_driven` 抛 `NotImplementedError` | `payload["strategy"]` |
-| 评审 | `full` / `verification` / `observation` —— 各用不同模板和不同思考预算(`verification` 最高) | `payload["kind"]` |
+| 评审 | `full` / `verification` / `observation` —— 各用不同模板,以及不同的思考预算(留给模型内部推理的 token 额度,`verification` 最高) | `payload["kind"]` |
 | 排序 | `AddToTournament`(纯数据库写入,不调模型)/ `RunTournamentBatch` | `task.action` |
 | ↳ 配对 | 指定 focus · 新 × 最近 Elo(`p_new`)· 近 Elo × 远想法(`p_close`)· 前半随机(`p_random`) | 随机数落进哪个桶 |
 | ↳ 比赛模式 | `debate` / `pairwise` | 场次 `< debate_when_matches_lt` 或 \|ΔElo\| `< debate_when_elo_delta_lt` 时用辩论 |
@@ -147,7 +149,9 @@ ORDER BY priority ASC, created_at ASC LIMIT 1
 
 ## 决策点
 
-这些分支读代码时最容易漏掉,因为它们是**静默结束一条链**,而不是抛异常:
+这些分支读代码时最容易漏掉,因为它们是**静默结束一条链**,而不是抛异常。
+
+表里的"工具循环"指模型请求调工具、系统执行、把结果送回去、模型接着想这样一个来回;**驱动模式**是本项目自己驱动这个来回(API 后端),**捕获模式**是后端自己就是一个 agent harness、内部跑完了循环,这边只读它记录下来的结果(订阅制 CLI 后端)。
 
 | 位置 | 条件 | 后果 |
 | --- | --- | --- |

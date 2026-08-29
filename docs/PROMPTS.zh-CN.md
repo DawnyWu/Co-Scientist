@@ -4,22 +4,24 @@
 
 这份文档是**对照导读**,不是替换。每一节给出:模板文件、谁在什么时候调用它、那些 `{{ 变量 }}` 由谁填什么(这一点单看模板是看不出来的,得对着 agent 代码才知道)、提示词的中文意思、以及这段提示词的关键设计。
 
-原文在 [`config/prompts/`](../config/prompts/)。`agent.mode` 到文件的映射由 [`co_scientist/llm/prompts.py`](../co_scientist/llm/prompts.py) 里的 `TEMPLATES` 字典单一定义。
+原文在 [`config/prompts/`](../config/prompts/)。模式键到文件的映射由 [`co_scientist/llm/prompts.py`](../co_scientist/llm/prompts.py) 里的 `TEMPLATES` 字典单一定义。
 
 架构和调度见 [ARCHITECTURE.zh-CN.md](ARCHITECTURE.zh-CN.md);踩过的坑见 [PITFALLS.zh-CN.md](PITFALLS.zh-CN.md)。
+
+术语在第一次出现的地方就地解释,不另设术语表;之后沿用简称。
 
 ## 目录
 
 按一次会话里的实际调用顺序:
 
-| # | `agent.mode` | 模板 | 状态 |
+| # | 模式键 | 模板 | 状态 |
 | --- | --- | --- | --- |
 | 1 | `parse_goal` | `parse_goal.md` | 在用 |
 | 2 | `generation.literature` | `generation_literature.md` | 在用 |
-| 3 | `generation.debate` | `generation_debate.md` | **未接线** |
+| 3 | `generation.debate` | `generation_debate.md` | **当前跑不到** |
 | 4 | `reflection.full` | `reflection_review.md` | 在用 |
-| 5 | `reflection.verification` | `reflection_verification.md` | **未接线** |
-| 6 | `reflection.observation` | `reflection_observation.md` | **未接线** |
+| 5 | `reflection.verification` | `reflection_verification.md` | **当前跑不到** |
+| 6 | `reflection.observation` | `reflection_observation.md` | **当前跑不到** |
 | 7 | `ranking.pairwise` | `ranking_pairwise.md` | 在用 |
 | 8 | `ranking.debate` | `ranking_debate.md` | 在用 |
 | 9 | `evolution.combine` | `evolution_combine.md` | 在用 |
@@ -29,12 +31,15 @@
 | 13 | `metareview.system` | `metareview_system.md` | 在用 |
 | 14 | `metareview.final` | `metareview_final.md` | 在用 |
 
-三个"未接线"的模板已经写好、也在 `[thinking]` 和模型路由里配好了,但对应 agent 的 `execute()` 目前会对这些模式抛 `NotImplementedError`——`generation.py` 只接受 `strategy="literature"`,`reflection.py` 只接受 `kind="full"`。
+第二列那种 `generation.literature` 形式的字符串是这个项目自己的**模式键**,格式是 `agent 名.模式名`。它就是一个查表用的字符串——`TEMPLATES` 字典用它找模板文件,模型路由用它决定该调哪个模型。它不是 Python 语法,也不对应任何一个类或方法。(下文出现的 `[models] generation` 这种方括号写法则是配置项:方括号里是 TOML 的段名,后面是该段下的一项;而 `execute()` 这种带括号的是 Python 方法。三种记法故意长得不一样。)
+
+三个标为"当前跑不到"的模板已经写好,`[thinking]` 段和模型路由里也都配好了条目,但对应 agent 的入口方法会直接拒绝这些模式:`generation.py` 只接受 `strategy="literature"`,`reflection.py` 只接受 `kind="full"`,别的一律抛 `NotImplementedError`。所以不管任务载荷里填什么,这三个模板都不会被渲染。
 
 ## 1. `parse_goal`
 
-**谁调用:** Supervisor 的 `_parse_goal`,一次会话只跑一次,在任何 agent 启动之前。
-**模型:** `models.parse_goal`(便宜档)。**工具:** 只有 `record_research_plan`,强制调用。
+**谁调用:** `Supervisor` 类的 `_parse_goal()` 方法,一次会话只跑一次,在任何 agent 启动之前。
+**模型:** `[models] parse_goal`。这个项目只把模型分**强弱两档**——推理重的 agent 用强的,其余用便宜的;`parse_goal` 用便宜档。
+**工具:** 只有 `record_research_plan`,强制调用。
 
 | 变量 | 谁填 | 填什么 |
 | --- | --- | --- |
@@ -61,8 +66,8 @@
 
 ## 2. `generation.literature` — 目前唯一在用的生成策略
 
-**谁调用:** `GenerationAgent.execute`,会话开始时按 `--n` 入队多个,以及理论上的反馈驱动路径。
-**模型:** `models.generation`(强档),thinking 4000,`max_output_tokens=8192`,最多 8 轮工具循环。
+**谁调用:** `GenerationAgent` 类的 `execute()` 方法,会话开始时按 `--n` 入队多个。
+**模型:** `[models] generation`(强档)。**思考预算** 4000——留给模型内部推理的 token 额度,只有 Anthropic 后端会真的按这个数发出去,别的后端会翻译成自己的档位或者直接丢弃。**输出上限** 8192 token。最多 8 轮**工具循环**:模型请求调工具、系统执行、把结果送回去、模型接着想,这样一个来回算一轮。
 **工具:** `web_search` / `web_fetch` / `pubmed_search` / `arxiv_search` / `europe_pmc_search` / `literature_*`,加 `record_hypothesis`。
 
 | 变量 | 谁填 | 填什么 |
@@ -96,20 +101,20 @@
 
 那一整段加粗的部分是这个项目最重要的一段提示词工程,原因见 [PITFALLS.zh-CN.md 的 A1](PITFALLS.zh-CN.md)。没有它,模型会无限检索然后耗尽轮次、什么都不产出。
 
-**关键设计:** 一次调用只产**一个**假设,并行度靠多个任务而不是靠要求模型一次给多个。这让每个假设各自拥有一次完整的工具循环和一次完整的引用溯源。
+**关键设计:** 一次调用只产**一个**假设,并行度靠多个任务而不是靠要求模型一次给多个。这让每个假设各自拥有一次完整的工具循环,以及一次完整的**引用溯源**——记录模型实际看过哪些 URL,好让每条引用都能被核对,而不是只能被信任。
 
-## 3. `generation.debate` — 已写好但未接线
+## 3. `generation.debate` — 已写好但当前跑不到
 
 模拟一场多专家的讨论。提示词让模型扮演一场"协作论述"里的一位专家:开局时提出三个不同的假设;后续轮次里提出澄清问题、批判性评估已有假设(是否符合想法属性、有用性与实用性、细节与具体程度)、指出弱点、提出改进,并以一个精炼版本收尾。终止条件写得很具体:
 
 > 当讨论已经充分展开(通常 3–5 轮,最多 10 轮)且所有相关问题都已被彻底处理和澄清,就以写下 "HYPOTHESIS"(全大写)结束流程,后接一段简洁自足的最终想法陈述。然后立即调用 `record_hypothesis` 工具登记这个最终假设。
 
-它带 `#BEGIN TRANSCRIPT#` / `#END TRANSCRIPT#` 两个标记和一个 `transcript` 变量,也就是说设计上是**多次调用累积一份逐字记录**,每次调用扮演下一位发言者。这也是它未接线的原因:需要一个 Generation 之外的多轮编排层。
+它带 `#BEGIN TRANSCRIPT#` / `#END TRANSCRIPT#` 两个标记和一个 `transcript` 变量,也就是说设计上是**多次调用累积一份逐字记录**,每次调用扮演下一位发言者。这也是它当前跑不到的原因:需要一个 Generation 之外的多轮编排层。
 
 ## 4. `reflection.full` — 目前唯一在用的评审模式
 
-**谁调用:** `ReflectionAgent.execute`,由 `hypothesis_created` 触发。
-**模型:** `models.reflection`(强档),`max_output_tokens=4096`,最多 8 轮。**工具:** 同 Generation 那五个,加 `record_review`。
+**谁调用:** `ReflectionAgent` 类的 `execute()` 方法,由上一个任务返回 `hypothesis_created` 触发。
+**模型:** `[models] reflection`(强档),输出上限 4096 token,最多 8 轮工具循环。**工具:** 同 Generation 那五个,加 `record_review`。
 
 | 变量 | 谁填 | 填什么 |
 | --- | --- | --- |
@@ -135,7 +140,7 @@
 
 **关键设计:** 最后那段是引用溯源在提示词层面的另一半(代码层面还会再过滤一遍)。它给了模型一个**合法出口**——"改写到 `notes` 里"——这比单纯禁止更有效,因为模型仍然可以表达那个判断,只是不能把它伪装成有来源的证据。
 
-## 5. `reflection.verification` — 深度验证(未接线)
+## 5. `reflection.verification` — 深度验证(当前跑不到)
 
 把假设拆解成核心假定,逐条独立评估:
 
@@ -146,9 +151,9 @@
 >
 > 完成后调用 `record_review`,`kind="verification"`,`assumptions[]` 每条对应一个你分析过的假定,整体 `verdict` 按最有后果的发现来定(`disproved` 保留给"某个假定被强文献证据直接反驳"的情况),用 `notes` 标出最薄弱假定和建议实验。
 
-这是全系统思考预算最高的模式之一(`reflection_verification = 12000`),而且在 `NEVER_DEGRADE` 集合里——不允许降级到更便宜的模型。
+这是全系统思考预算最高的模式之一(配置项 `[thinking] reflection_verification = 12000`),而且在 `NEVER_DEGRADE` 集合里——预算紧张时系统会把某些调用降到更便宜的模型,这个模式不允许被这样降级。
 
-## 6. `reflection.observation` — 观察比对(未接线)
+## 6. `reflection.observation` — 观察比对(当前跑不到)
 
 判断一个假设是否为某篇文章里的观察提供了新颖的因果解释。它的独特之处是**要求模型输出固定的句式前缀**:
 
@@ -166,13 +171,13 @@
 
 ## 7. `ranking.pairwise` — 两两比较
 
-**谁调用:** `RankingAgent._run_debate`,当两个假设都打过 ≥2 场且 |ΔElo| ≥ 50 时。
-**模型:** `models.ranking_pairwise`(便宜档),`max_output_tokens=2048`。
-**工具:** **空集,`tool_choice=None`**。
+**谁调用:** `RankingAgent` 类的 `_run_debate()` 方法,当两个假设都打过 ≥2 场、且 **Elo** 分差 ≥ 50 时。Elo 就是国际象棋那套评分:初始都是 1200,赢了加分输了扣分,分差越大时意外胜利加得越多。
+**模型:** `[models] ranking_pairwise`(便宜档),输出上限 2048 token。
+**工具:** **空集,`tool_choice=None`**——也就是不给工具、也不强制调用任何工具。
 
 | 变量 | 谁填 | 填什么 |
 | --- | --- | --- |
-| `hypothesis_1` / `hypothesis_2` | 两个假设的 `full_text` | **按 id 排序**——小的当 1 号,让缓存命中聚集 |
+| `hypothesis_1` / `hypothesis_2` | 两个假设的 `full_text` | **按 id 排序**,小的当 1 号。这样同一个假设在多场比赛里总出现在同一位置,提示词的前缀相同,能命中**提示词缓存**(相同前缀不重复计费) |
 | `review_1` / `review_2` | 各自的最佳评审 | 优先 `full` 类型,其次 novelty 分高的 |
 | `idea_attributes` | `research_plan.idea_attributes` | |
 | `notes` | agent 代码硬编码 | "要果断。以 `better idea: <1 或 2>` 这一行结束回复" |
@@ -201,8 +206,8 @@
 
 ## 8. `ranking.debate` — 升级成多专家辩论
 
-**何时用:** 任一方打过的场次 < `debate_when_matches_lt`(默认 2),或 |ΔElo| < `debate_when_elo_delta_lt`(默认 50)。也就是**信息量最高的对局**——新假设,或者势均力敌的对手。
-**模型:** `models.ranking_debate`,thinking 8000(是 pairwise 的两倍)。
+**何时用:** 任一方打过的场次 < 配置项 `[ranking] debate_when_matches_lt`(默认 2),或 Elo 分差 < `[ranking] debate_when_elo_delta_lt`(默认 50)。也就是**信息量最高的对局**——新假设,或者势均力敌的对手。
+**模型:** `[models] ranking_debate`,思考预算 8000(是 pairwise 的两倍)。
 
 > 你是比较分析方面的专家,正在模拟一个领域专家小组进行结构化讨论,以评价两个相互竞争的假设。目标是基于一组预定义的属性和判据,严格判定哪个假设更优。**这些专家对任一假设都没有既有偏好,他们只关心找出最优选择——因为两者只能实现其中一个。**
 >
@@ -218,7 +223,7 @@
 
 ## 9. `evolution.combine` — 合并两个假设
 
-**何时用:** 空闲补活,成熟假设数 ≥ `min_mature` 时触发。挑的是 Elo top-K 里**向量距离最远**的一对。
+**何时用:** 队列空了之后由 `_decide_next_steps()` 补充入队,条件是**成熟**假设(打过 ≥3 场的)数量 ≥ 配置项 `[evolution] min_mature`。挑的是 Elo 前 K 名里**向量距离最远**的一对。
 
 > 你是科学综合方面的专家。把下面两个假设各自最好的部分合并成一个新的、更强的假设。结果必须 (a) 保留各自有效的部分,(b) **显式解决两者之间的任何矛盾**,(c) 比任一父代都更具体、更可检验。
 >
@@ -273,14 +278,14 @@
 
 ## 13. `metareview.system` — 周期性系统反馈
 
-**何时用:** 空闲补活,条件是比赛数 ≥ (已有反馈数 + 1) × 50。
-**模型:** `models.metareview_feedback`(便宜档)。**工具:** 空集,强制 `record_system_feedback`。
+**何时用:** 队列空了之后由 `_decide_next_steps()` 补充入队,条件是比赛数 ≥ (已有反馈数 + 1) × 50。
+**模型:** `[models] metareview_feedback`(便宜档)。**工具:** 空集,强制 `record_system_feedback`。
 
 | 变量 | 谁填 | 填什么 |
 | --- | --- | --- |
 | `reviews` | 最多 50 条评审的正文 | 每条截到 3000 字 |
 | `debate_rationales` | 最近 50 条比赛的辩论理由 | 每条截到 1500 字 |
-| `sources` | `_hydrate_sources` 从磁盘 artifact 读回 | 带 `[S...]` 标签的来源清单 |
+| `sources` | `_hydrate_sources()` 从磁盘上的 JSON 产物读回 | 带 `[S...]` 标签的来源清单 |
 
 **提示词在说:**
 
@@ -300,14 +305,14 @@
 >
 > 完成后调用 `record_system_feedback`,填 `common_weaknesses[]`、`common_strengths[]`、`suggested_focus_areas[]`。用 `narrative` 写 1–2 段综述,**它将被注入到未来的 Generation 和 Evolution 提示词里**。
 
-**关键设计:** 最后那句是整个反馈回路的接口说明。`narrative` 的产出会被写进 `system_feedback` 表,而 Generation 的 `_build_session_context` 会读取最新一条、用 `quote_untrusted` 包好后放进 system 块。这就是论文里"meta-review 反馈回流"的实际落点。
+**关键设计:** 最后那句是整个反馈回路的接口说明。`narrative` 的产出会被写进 `system_feedback` 表,而 Generation 里的 `_build_session_context()` 会读取最新一条、用 `quote_untrusted()` 包成不可信数据块后放进 system 块。这就是论文里"meta-review 反馈回流"的实际落点。
 
 "不要评价单个提案"这句是在阻止模型退化成又一轮评审——它的职责是找**模式**,不是找问题。
 
 ## 14. `metareview.final` — 最终研究综述
 
-**何时用:** 终止判据命中后,由 `_finalize` 直接执行。
-**模型:** `models.metareview_final`(强档),thinking 16000(全系统最高),`max_output_tokens=8192`。
+**何时用:** 终止判据命中后,由 `Supervisor` 的 `_finalize()` 方法直接执行。
+**模型:** `[models] metareview_final`(强档),思考预算 16000(全系统最高),输出上限 8192 token。
 **工具:** **空集且 `tool_choice=None`** —— 这是唯一不走强制 schema 的调用,因为产物就是给人读的散文。
 
 **提示词在说:**
@@ -339,7 +344,7 @@
 - **"一个季度内能做完的实验"** —— 给出时间尺度,把建议从"应该研究 X"变成可执行的动作。
 - **"注意事项与局限"整节,尤其是"领域专家最可能在哪里不同意锦标赛的判决"** —— 主动要求系统自我批评。这是对抗"锦标赛排名看起来很权威"这种过度自信的唯一手段。
 - **来源清单为空时要明确说明并标注需要核实** —— 一个诚实的降级路径。没有它,模型在没有任何来源的情况下会照旧编出引用。
-- **`[S...]` 标签机制** —— 因为溯源规则要求"只能引用真见过的 URL",而这次调用没有工具、没法自己检索,所以来源必须由代码从磁盘 artifact 里还原并预先渲染成带标签的清单(`_hydrate_sources` + `_source_block` 做的就是这件事)。
+- **`[S...]` 标签机制** —— 因为溯源规则要求"只能引用真见过的 URL",而这次调用没有工具、没法自己检索,所以来源必须由代码从磁盘上的 JSON 产物里还原、并预先渲染成带标签的清单(`_hydrate_sources()` 和 `_source_block()` 做的就是这件事)。
 
 ## 通读之后的几个观察
 
@@ -351,4 +356,4 @@
 
 **四、约束多数以"禁止 + 出口"的形式出现,而不是纯禁止。** "没有支撑来源的主张不要放进 evidence,**要么删掉,要么改写到 notes 里**";"来源清单为空就明确说明并标注需要核实";"文献沉默就说明这一点"。给模型一条合法的退路,比单纯禁止有效得多。
 
-**五、四个进化策略的差异全在提示词里,代码几乎相同。** `combine` 和 `out_of_box` 因为输入不同(一对 vs 前五个)有各自的输入构造函数,`simplify` 和 `feasibility` 共用 `_unary`。所以"进化"这个 agent 的四种行为差异,本质上就是四段提示词的差异——这是这个系统里少数"差异真的主要来自提示词"的地方。
+**五、四个进化策略的差异全在提示词里,代码几乎相同。** `combine` 和 `out_of_box` 因为输入不同(一对 vs 前五个)有各自的输入构造函数,`simplify` 和 `feasibility` 共用同一个 `_unary()` 方法。所以"进化"这个 agent 的四种行为差异,本质上就是四段提示词的差异——这是这个系统里少数"差异真的主要来自提示词"的地方。
