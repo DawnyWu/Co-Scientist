@@ -24,6 +24,10 @@ A **Supervisor** parses the goal into a research plan and schedules agent tasks 
 This is an independent re-implementation in Python on top of pluggable LLM provider SDKs — not affiliated with Google or the paper's authors.
 
 > [`docs/BENCH_RESULTS.md`](docs/BENCH_RESULTS.md) — every cross-model bench ever run on this code, with per-candidate Elo, every hypothesis produced, gold-set hits, and direct file pointers. Auto-generated from the bench DB.
+>
+> [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — how control actually flows: the scheduling rules, every branch point, and the runtime's single-process assumption.
+>
+> [`docs/PITFALLS.md`](docs/PITFALLS.md) — the bugs this project hit and what each one cost, from "the model searches forever and never commits" to "a grandchild process holding a pipe deadlocks the call". Written to be readable without a concurrency background.
 
 ## Contents
 
@@ -514,12 +518,14 @@ co_scientist/
   obs/          # metrics (tokens, cost, cache hit ratio, latency)
   web/          # FastAPI + htmx + SSE UI + sanitized markdown renderer
   evals/        # per-agent + e2e + regression evals
-  tests/        # 213 unit tests + fixtures + smoke
+  tests/        # 314 unit tests + fixtures + smoke
 config/
   default.toml
   prompts/      # 14 Jinja2 templates (one per agent.mode), derived from
                 # the paper's supplementary prompts
 docs/
+  ARCHITECTURE.md    # control flow, scheduling rules, branch points
+  PITFALLS.md        # bugs hit and why each fix is shaped the way it is
   BENCH_RESULTS.md   # every bench ever run (auto-generated)
 scripts/
   build_bench_report.py
